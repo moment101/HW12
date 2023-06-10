@@ -21,6 +21,7 @@ contract Q1Script is Script {
     Comptroller comptroller;
     SimplePriceOracle priceOracle;
     Unitroller unitroller;
+    Comptroller unitrollerProxy;
     WhitePaperInterestRateModel interestRateModel;
     CErc20Delegate cErc20Delegate;
     CErc20Delegator cErc20Delegator;
@@ -40,12 +41,17 @@ contract Q1Script is Script {
         qqq = new MyErc20("TripleQ", "QQQ", 18);
 
         comptroller = new Comptroller();
-        priceOracle = new SimplePriceOracle();
-        comptroller._setPriceOracle(priceOracle);
 
         unitroller = new Unitroller();
+        unitrollerProxy = Comptroller(address(comptroller));
         unitroller._setPendingImplementation(address(comptroller));
-        unitroller._acceptImplementation();
+        comptroller._become(unitroller);
+
+        priceOracle = new SimplePriceOracle();
+
+        unitrollerProxy._setPriceOracle(priceOracle);
+        unitrollerProxy._setCloseFactor(5e16);
+        unitrollerProxy._setLiquidationIncentive(108e16);
 
         interestRateModel = new WhitePaperInterestRateModel(0, 0);
         cErc20Delegate = new CErc20Delegate();
@@ -58,15 +64,13 @@ contract Q1Script is Script {
             "TripleQPool",
             "cQQQ",
             18,
-            payable(deployerAddress),
+            payable(msg.sender),
             address(cErc20Delegate),
-            "" // bytes memory becomeImplementationData
+            "0x0" // bytes memory becomeImplementationData
         );
 
-        address[] memory cTokens = new address[](1);
-        cTokens[0] = address(cErc20Delegate);
-        comptroller.enterMarkets(cTokens);
-        comptroller._supportMarket(cErc20Delegate);
+        uint setSupport = unitrollerProxy._supportMarket(cErc20Delegate);
+        require(setSupport == 0, "support marker error");
 
         vm.stopBroadcast();
     }
