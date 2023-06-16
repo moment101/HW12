@@ -4,27 +4,19 @@ pragma solidity ^0.8.13;
 import "forge-std/Test.sol";
 import {MyErc20} from "../src/MyErc20.sol";
 import {ERC20} from "openzeppelin/token/ERC20/ERC20.sol";
-
 import {CErc20} from "compound-protocol/contracts/CErc20.sol";
 import {CErc20Delegator} from "compound-protocol/contracts/CErc20Delegator.sol";
 import {WhitePaperInterestRateModel} from "compound-protocol/contracts/WhitePaperInterestRateModel.sol";
 import {CErc20Delegate} from "compound-protocol/contracts/CErc20Delegate.sol";
-
 import {Comptroller} from "compound-protocol/contracts/Comptroller.sol";
 import {Unitroller} from "compound-protocol/contracts/Unitroller.sol";
 import {SimplePriceOracle} from "compound-protocol/contracts/SimplePriceOracle.sol";
 import {CToken} from "compound-protocol/contracts/CToken.sol";
-import {IPool} from "aave-v3-core/contracts/interfaces/IPool.sol";
-import {IFlashLoanSimpleReceiver, IPoolAddressesProvider, IPool} from "aave-v3-core/contracts/flashloan/interfaces/IFlashLoanSimpleReceiver.sol";
 import {AaveFlashLoan} from "../src/AaveFlashLoan.sol";
-import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 
-contract Q6Test is Test, IFlashLoanSimpleReceiver {
+contract Q6Test is Test {
     uint256 mainnetFork;
-    uint256 sepoliaFork;
-
     string MAINNET_RPC_URL = vm.envString("MAINNET_RPC_URL");
-    string SEPOLIA_RPC_URL = vm.envString("SEPOLIA_RPC_URL");
 
     address USDC_Addr = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address UNI_Addr = 0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984;
@@ -54,8 +46,6 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
     CErc20Delegate cErc20DelegateB;
     CErc20Delegator cTokenB;
 
-    IPool pool;
-
     AaveFlashLoan public liquidator;
 
     /*
@@ -75,18 +65,8 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
     可以自行檢查清算 50% 後是不是大約可以賺 63 USDC
     */
 
-    /*
-        進階題:
-
-        1. 使用一套治理框架（例如 Governor Bravo 加上 Timelock）完成 Comptroller 中的設置
-        2. 賞析 UniswapAnchoredView 合約並使用其作為 Comptroller 中設置的 oracle 來實現清算
-        3. 設計一個能透過 Flash loan 清算多種代幣類型的智能合約
-        4. 研究 Aave 協議，比較這些借貸協議在功能上與合約開發上的差異
-    */
-
     function setUp() public {
         mainnetFork = vm.createFork(MAINNET_RPC_URL);
-        sepoliaFork = vm.createFork(SEPOLIA_RPC_URL);
 
         vm.selectFork(mainnetFork);
         vm.rollFork(blockNumber);
@@ -193,15 +173,15 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
 
         vm.stopPrank();
 
-        // deal(user1, 100 * 10 ** 18);
-        // deal(user2, 100 * 10 ** 18);
-
         vm.label(address(tokenA), "USDC");
         vm.label(address(cTokenA), "cUSDC");
         vm.label(address(tokenB), "UNI");
         vm.label(address(cTokenB), "cUNI");
 
-        liquidator = new AaveFlashLoan();
+        liquidator = new AaveFlashLoan(
+            payable(address(cTokenA)),
+            payable(address(cTokenB))
+        );
     }
 
     function test_AAVE_liquidate() public {
@@ -246,80 +226,14 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
         vm.stopPrank();
 
         console.log("-----------START Borrow tokenA from AAve -----------");
-        pool = POOL();
-        pool.flashLoanSimple(address(this), USDC_Addr, 1250 * 10 ** 6, "", 0);
 
-        // After Test contract repay USDC back to AAve, Test Contract transfer all the rest USDC to User2
-        tokenA.transfer(user2, tokenA.balanceOf(address(this)));
-        _summaryUser("User 2 after Repay back to AAva", user2);
-        _summaryUser("This contract after Repay back to AAva", address(this));
-    }
+        vm.prank(user2);
+        liquidator.execute(user1, 1250 * 10 ** 6);
 
-    function executeOperation(
-        address asset,
-        uint256 amount,
-        uint256 premium,
-        address initiator,
-        bytes calldata params
-    ) external returns (bool) {
-        uint256 usdcAmount = tokenA.balanceOf(address(this));
-        console.log("Test contract usdc amount:", usdcAmount);
-
-        // Test Contract liquidate borrow for user1
-        uint repayAmountMax = 1250 * 10 ** 6;
-        tokenA.approve(address(cTokenA), repayAmountMax);
-
-        uint resultLiquidate = cTokenA.liquidateBorrow(
-            user1,
-            repayAmountMax,
-            CToken(address(cTokenB))
-        );
-        require(resultLiquidate == 0, "Liquidate fail");
-
-        _summaryUser("User 1 after liquate", user1);
-        _summaryUser("User 2 after liquate", user2);
-        _summaryAccountLiquidity("After Liquidated");
-
-        // Test Contract redeem cUNI, get UNI
-        cTokenB.redeem(cTokenB.balanceOf(address(this)));
-
-        uint uniAmount = tokenB.balanceOf(address(this));
-        console.log("Test contract uni amount:", uniAmount);
-
-        // Test Contract Swap UNI to USDC
-        ISwapRouter.ExactInputSingleParams memory swapParams = ISwapRouter
-            .ExactInputSingleParams({
-                tokenIn: UNI_Addr,
-                tokenOut: USDC_Addr,
-                fee: 3000, // 0.3%
-                recipient: address(this),
-                deadline: block.timestamp,
-                amountIn: uniAmount,
-                amountOutMinimum: 0,
-                sqrtPriceLimitX96: 0
-            });
-        ISwapRouter swapRouter = ISwapRouter(
-            0xE592427A0AEce92De3Edee1F18E0157C05861564
-        );
-        tokenB.approve(address(swapRouter), uniAmount);
-        uint amountOut = swapRouter.exactInputSingle(swapParams);
-        console.log("Uniswap back USDC amount", amountOut);
-
-        _summaryUser("User 2 after Uniswap", user2);
-        _summaryUser("This contract after Uniswap", address(this));
-
-        // Test Contract approve AAve to get USDC + fee back
-        uint fee = 62.5 * 10 ** 4;
-        tokenA.approve(address(pool), 1250 * 10 ** 6 + fee); // 0.05%
-        return true;
-    }
-
-    function ADDRESSES_PROVIDER() public view returns (IPoolAddressesProvider) {
-        return IPoolAddressesProvider(POOL_ADDRESSES_PROVIDER);
-    }
-
-    function POOL() public view returns (IPool) {
-        return IPool(ADDRESSES_PROVIDER().getPool());
+        console.log("-----------RESULT-----------");
+        _summaryUser("User 1 Final", user1);
+        _summaryUser("User 2 Final", user2);
+        _summaryUser("TEST CONTRACT Final", address(this));
     }
 
     function _summaryUser(string memory condiction, address addr) internal {
