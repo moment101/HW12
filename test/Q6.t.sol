@@ -17,7 +17,7 @@ import {CToken} from "compound-protocol/contracts/CToken.sol";
 import {IPool} from "aave-v3-core/contracts/interfaces/IPool.sol";
 import {IFlashLoanSimpleReceiver, IPoolAddressesProvider, IPool} from "aave-v3-core/contracts/flashloan/interfaces/IFlashLoanSimpleReceiver.sol";
 import {AaveFlashLoan} from "../src/AaveFlashLoan.sol";
-import {ISwapRouter} from "v3-periphery/interfaces/ISwapRouter.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 
 contract Q6Test is Test, IFlashLoanSimpleReceiver {
     uint256 mainnetFork;
@@ -54,7 +54,9 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
     CErc20Delegate cErc20DelegateB;
     CErc20Delegator cTokenB;
 
-    // AaveFlashLoan public aaveFlashLoan;
+    IPool pool;
+
+    // AaveFlashLoan public liquidator;
 
     /*
     Q6:  請使用 Foundry 的 fork 模式撰寫測試，並使用 AAVE 的 Flash loan 來清算 User1，請遵循以下細節：
@@ -103,7 +105,7 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
         deal(user1, initialBalance);
         deal(user2, initialBalance);
 
-        // vm.makePersistent(user2);
+        vm.makePersistent(user2);
 
         vm.startPrank(admin);
 
@@ -191,13 +193,15 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
 
         vm.stopPrank();
 
-        deal(user1, 100 * 10 ** 18);
-        deal(user2, 100 * 10 ** 18);
+        // deal(user1, 100 * 10 ** 18);
+        // deal(user2, 100 * 10 ** 18);
 
         vm.label(address(tokenA), "USDC");
         vm.label(address(cTokenA), "cUSDC");
         vm.label(address(tokenB), "UNI");
         vm.label(address(cTokenB), "cUNI");
+
+        // liquidator = new AaveFlashLoan();
     }
 
     function test_AAVE_liquidate() public {
@@ -208,11 +212,11 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
             address(cTokenA),
             100000000 * 10 ** cTokenA.decimals()
         );
-        deal(
-            address(user2),
-            address(tokenA),
-            100000000 * 10 ** tokenA.decimals()
-        );
+        // deal(
+        //     address(user2),
+        //     address(tokenA),
+        //     100000000 * 10 ** tokenA.decimals()
+        // );
 
         console.log("-----------START test_borrow-----------");
         vm.startPrank(user1);
@@ -243,33 +247,19 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
             "Under Liquidity line, coz tokenB price changed."
         );
 
-        uint fee = 62.5 * 10 ** 4;
-        deal(address(tokenA), user2, fee);
+        // uint fee = 62.5 * 10 ** 4;
+        // deal(address(tokenA), user2, fee);
         vm.startPrank(user2);
         console.log("C");
 
-        IPool pool = POOL();
-        tokenA.approve(address(pool), 1250 * 10 ** 6 + fee); // 0.05%
+        pool = POOL();
+        // tokenA.approve(address(pool), 1350 * 10 ** 6); // 0.05%
         pool.flashLoanSimple(address(this), USDC_Addr, 1250 * 10 ** 6, "", 0);
         vm.stopPrank();
 
-        // uint repayAmountMax = 1250 * 10 ** 6;
-        // tokenA.approve(address(cTokenA), repayAmountMax);
-
-        // uint resultLiquidate = cTokenA.liquidateBorrow(
-        //     user1,
-        //     repayAmountMax,
-        //     CToken(address(cTokenB))
-        // );
-        // require(resultLiquidate == 0, "Liquidate fail");
-
-        // _summaryUser("User 1 after liquate", user1);
-        // _summaryUser("User 2 after liquate", user2);
-        // _summaryAccountLiquidity("After Liquidated");
-
-        // console.log("D");
-
-        // vm.stopPrank();
+        tokenA.transfer(user2, tokenA.balanceOf(address(this)));
+        _summaryUser("User 2 after Repay back to AAva", user2);
+        _summaryUser("This contract after Repay back to AAva", address(this));
     }
 
     function executeOperation(
@@ -280,13 +270,15 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
         bytes calldata params
     ) external returns (bool) {
         // liquidate Compound
-        // vm.stopPrank();
+        vm.stopPrank();
         // vm.startPrank(user2);
 
         console.log("W");
 
         uint256 usdcAmount = tokenA.balanceOf(address(this));
         console.log("Test contract usdc amount:", usdcAmount);
+
+        // tokenA.transferFrom(address(this), user2, usdcAmount);
 
         // User2 repay borrow the borrowAmount * closeFactor of user1
         // Before repay, user2 should approve tokenA for cTokenA pool
@@ -312,29 +304,38 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
         uint uniAmount = tokenB.balanceOf(address(this));
         console.log("Test contract uni amount:", uniAmount);
 
-        // ISwapRouter.ExactInputSingleParams memory swapParams = ISwapRouter
-        //     .ExactInputSingleParams({
-        //         tokenIn: UNI_ADDRESS,
-        //         tokenOut: USDC_ADDRESS,
-        //         fee: 3000, // 0.3%
-        //         recipient: address(this),
-        //         deadline: block.timestamp,
-        //         amountIn: uniAmount,
-        //         amountOutMinimum: 0,
-        //         sqrtPriceLimitX96: 0
-        //     });
-        // ISwapRouter swapRouter = ISwapRouter(
-        //     0xE592427A0AEce92De3Edee1F18E0157C05861564
-        // );
-        // uint amountOut = swapRouter.exactInputSingle(swapParams);
+        ISwapRouter.ExactInputSingleParams memory swapParams = ISwapRouter
+            .ExactInputSingleParams({
+                tokenIn: UNI_Addr,
+                tokenOut: USDC_Addr,
+                fee: 3000, // 0.3%
+                recipient: address(this),
+                deadline: block.timestamp,
+                amountIn: uniAmount,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
+            });
+        ISwapRouter swapRouter = ISwapRouter(
+            0xE592427A0AEce92De3Edee1F18E0157C05861564
+        );
+        tokenB.approve(address(swapRouter), uniAmount);
+        uint amountOut = swapRouter.exactInputSingle(swapParams);
 
         console.log("Uniswap back USDC amount", amountOut);
 
-        tokenA.transfer(user2, 1250 * 10 ** 6 + fee);
+        // Transfer all USDC from this contract to User2, User2 can repay back to AAve
+        // tokenA.transfer(user2, tokenA.balanceOf(address(this)));
 
-        // https://docs.uniswap.org/protocol/guides/swaps/single-swaps
+        // uint fee = 62.5 * 10 ** 4;
+        // tokenA.transfer(user2, 1250 * 10 ** 6 + fee);
+
+        _summaryUser("User 2 after Uniswap", user2);
+        _summaryUser("This contract after Uniswap", address(this));
 
         // vm.stopPrank();
+
+        uint fee = 62.5 * 10 ** 4;
+        tokenA.approve(address(pool), 1250 * 10 ** 6 + fee); // 0.05%
 
         console.log("E");
         return true;
