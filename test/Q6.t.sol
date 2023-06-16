@@ -56,7 +56,7 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
 
     IPool pool;
 
-    // AaveFlashLoan public liquidator;
+    AaveFlashLoan public liquidator;
 
     /*
     Q6:  請使用 Foundry 的 fork 模式撰寫測試，並使用 AAVE 的 Flash loan 來清算 User1，請遵循以下細節：
@@ -201,7 +201,7 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
         vm.label(address(tokenB), "UNI");
         vm.label(address(cTokenB), "cUNI");
 
-        // liquidator = new AaveFlashLoan();
+        liquidator = new AaveFlashLoan();
     }
 
     function test_AAVE_liquidate() public {
@@ -212,13 +212,8 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
             address(cTokenA),
             100000000 * 10 ** cTokenA.decimals()
         );
-        // deal(
-        //     address(user2),
-        //     address(tokenA),
-        //     100000000 * 10 ** tokenA.decimals()
-        // );
 
-        console.log("-----------START test_borrow-----------");
+        console.log("-----------START Mint cTokenB -----------");
         vm.startPrank(user1);
         _summaryUser("User 1 before mint", user1);
 
@@ -229,34 +224,32 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
         // Enter to market for collateral
         address[] memory cTokens = new address[](1);
         cTokens[0] = address(cTokenB);
-        // cTokens[1] = address(cTokenB);
         unitrollerProxy.enterMarkets(cTokens);
 
-        _summaryAccountLiquidity("Above Liquidity line");
+        _summaryAccountLiquidity("Did not meet liquidation condition");
 
+        console.log("-----------START Borrow tokenA -----------");
         cTokenA.borrow(2500 * 10 ** tokenA.decimals());
         _summaryUser("User 1 after borrow", user1);
         _summaryAccountLiquidity("after borrow");
 
         vm.stopPrank();
 
+        console.log(
+            "----Change tokenB price to meet liquidation condition-----"
+        );
         vm.startPrank(admin);
         priceOracle.setUnderlyingPrice(CToken(address(cTokenB)), 4e18);
-        vm.stopPrank();
         _summaryAccountLiquidity(
-            "Under Liquidity line, coz tokenB price changed."
+            "Under Liquidity line, because tokenB price changed."
         );
-
-        // uint fee = 62.5 * 10 ** 4;
-        // deal(address(tokenA), user2, fee);
-        vm.startPrank(user2);
-        console.log("C");
-
-        pool = POOL();
-        // tokenA.approve(address(pool), 1350 * 10 ** 6); // 0.05%
-        pool.flashLoanSimple(address(this), USDC_Addr, 1250 * 10 ** 6, "", 0);
         vm.stopPrank();
 
+        console.log("-----------START Borrow tokenA from AAve -----------");
+        pool = POOL();
+        pool.flashLoanSimple(address(this), USDC_Addr, 1250 * 10 ** 6, "", 0);
+
+        // After Test contract repay USDC back to AAve, Test Contract transfer all the rest USDC to User2
         tokenA.transfer(user2, tokenA.balanceOf(address(this)));
         _summaryUser("User 2 after Repay back to AAva", user2);
         _summaryUser("This contract after Repay back to AAva", address(this));
@@ -269,22 +262,10 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
         address initiator,
         bytes calldata params
     ) external returns (bool) {
-        // liquidate Compound
-        vm.stopPrank();
-        // vm.startPrank(user2);
-
-        console.log("W");
-
         uint256 usdcAmount = tokenA.balanceOf(address(this));
         console.log("Test contract usdc amount:", usdcAmount);
 
-        // tokenA.transferFrom(address(this), user2, usdcAmount);
-
-        // User2 repay borrow the borrowAmount * closeFactor of user1
-        // Before repay, user2 should approve tokenA for cTokenA pool
-        // uint repayAmountMax = (cTokenA.borrowBalanceCurrent(user1) *
-        // comptroller.closeFactorMantissa()) / 1e18;
-
+        // Test Contract liquidate borrow for user1
         uint repayAmountMax = 1250 * 10 ** 6;
         tokenA.approve(address(cTokenA), repayAmountMax);
 
@@ -299,11 +280,13 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
         _summaryUser("User 2 after liquate", user2);
         _summaryAccountLiquidity("After Liquidated");
 
+        // Test Contract redeem cUNI, get UNI
         cTokenB.redeem(cTokenB.balanceOf(address(this)));
 
         uint uniAmount = tokenB.balanceOf(address(this));
         console.log("Test contract uni amount:", uniAmount);
 
+        // Test Contract Swap UNI to USDC
         ISwapRouter.ExactInputSingleParams memory swapParams = ISwapRouter
             .ExactInputSingleParams({
                 tokenIn: UNI_Addr,
@@ -320,34 +303,22 @@ contract Q6Test is Test, IFlashLoanSimpleReceiver {
         );
         tokenB.approve(address(swapRouter), uniAmount);
         uint amountOut = swapRouter.exactInputSingle(swapParams);
-
         console.log("Uniswap back USDC amount", amountOut);
-
-        // Transfer all USDC from this contract to User2, User2 can repay back to AAve
-        // tokenA.transfer(user2, tokenA.balanceOf(address(this)));
-
-        // uint fee = 62.5 * 10 ** 4;
-        // tokenA.transfer(user2, 1250 * 10 ** 6 + fee);
 
         _summaryUser("User 2 after Uniswap", user2);
         _summaryUser("This contract after Uniswap", address(this));
 
-        // vm.stopPrank();
-
+        // Test Contract approve AAve to get USDC + fee back
         uint fee = 62.5 * 10 ** 4;
         tokenA.approve(address(pool), 1250 * 10 ** 6 + fee); // 0.05%
-
-        console.log("E");
         return true;
     }
 
     function ADDRESSES_PROVIDER() public view returns (IPoolAddressesProvider) {
-        console.log("A");
         return IPoolAddressesProvider(POOL_ADDRESSES_PROVIDER);
     }
 
     function POOL() public view returns (IPool) {
-        console.log("B");
         return IPool(ADDRESSES_PROVIDER().getPool());
     }
 
